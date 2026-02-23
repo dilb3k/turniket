@@ -1,13 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as faceapi from 'face-api.js';
 import { useNavigate } from 'react-router-dom';
-import { DESCRIPTOR_LENGTH, MODEL_SOURCES } from '../lib/turnstile/constants';
-import { createUserApi } from '../lib/turnstile/usersApi';
-
-const DETECTOR_OPTIONS = new faceapi.TinyFaceDetectorOptions({
-  inputSize: 320,
-  scoreThreshold: 0.5,
-});
+import { DESCRIPTOR_LENGTH } from '../lib/turnstile/constants';
+import { compactDescriptor } from '../lib/turnstile/descriptors';
+import { DETECTOR_OPTIONS, loadFaceModelsOnce } from '../lib/turnstile/faceEngine';
+import { createUserApi, fetchUsersApi } from '../lib/turnstile/usersApi';
 
 export function useRegister() {
   const webcamRef = useRef(null);
@@ -22,29 +19,10 @@ export function useRegister() {
   });
   const navigate = useNavigate();
 
-  const loadModels = useCallback(async () => {
-    let lastError = null;
-
-    for (const source of MODEL_SOURCES) {
-      try {
-        await Promise.all([
-          faceapi.nets.tinyFaceDetector.loadFromUri(source),
-          faceapi.nets.faceLandmark68Net.loadFromUri(source),
-          faceapi.nets.faceRecognitionNet.loadFromUri(source),
-        ]);
-        return;
-      } catch (error) {
-        lastError = error;
-      }
-    }
-
-    throw lastError || new Error('Face model yuklanmadi');
-  }, []);
-
   useEffect(() => {
     const boot = async () => {
       try {
-        await loadModels();
+        await loadFaceModelsOnce();
         setModelsLoaded(true);
         setStatus("Register tayyor. Endi user qo'shishingiz mumkin.");
       } catch (error) {
@@ -56,7 +34,7 @@ export function useRegister() {
     };
 
     boot();
-  }, [loadModels]);
+  }, []);
 
   const detectSingleFaceDescriptor = useCallback(async () => {
     const video = webcamRef.current?.video;
@@ -83,7 +61,7 @@ export function useRegister() {
       throw new Error("Yuz descriptor o'lchami xato.");
     }
 
-    return Array.from(descriptor);
+    return compactDescriptor(Array.from(descriptor));
   }, []);
 
   const onInputChange = useCallback((event) => {
@@ -91,11 +69,19 @@ export function useRegister() {
     setForm((prev) => ({ ...prev, [name]: value }));
   }, []);
 
+  const onClassQuickPick = useCallback((className) => {
+    setForm((prev) => ({ ...prev, className }));
+  }, []);
+
   const onSubmit = useCallback(
     async (event) => {
       event.preventDefault();
 
-      if (!form.name.trim() || !form.className.trim() || !form.rollNumber.trim()) {
+      const name = form.name.trim();
+      const className = form.className.trim();
+      const rollNumber = form.rollNumber.trim();
+
+      if (!name || !className || !rollNumber) {
         setStatus("Ro'yxatdan o'tish uchun barcha maydonni to'ldiring.");
         return;
       }
@@ -108,11 +94,22 @@ export function useRegister() {
       setRegistering(true);
 
       try {
+        const existing = await fetchUsersApi();
+        const duplicate = existing.find(
+          (item) =>
+            String(item.class || '').trim().toLowerCase() === className.toLowerCase() &&
+            String(item.rollNumber || '').trim().toLowerCase() === rollNumber.toLowerCase()
+        );
+
+        if (duplicate) {
+          throw new Error('Bu sinf va rollNumber bilan user allaqachon mavjud.');
+        }
+
         const descriptor = await detectSingleFaceDescriptor();
         const payload = {
-          name: form.name.trim(),
-          class: form.className.trim(),
-          rollNumber: form.rollNumber.trim(),
+          name,
+          class: className,
+          rollNumber,
           descriptor,
           lastPassedAt: null,
           passHistory: [],
@@ -122,7 +119,7 @@ export function useRegister() {
         setStatus(`Yangi user qo'shildi: ${payload.name}`);
         setForm({ name: '', className: '', rollNumber: '' });
 
-        setTimeout(() => navigate('/'), 600);
+        setTimeout(() => navigate('/'), 400);
       } catch (error) {
         console.error(error);
         setStatus(error.message || "Ro'yxatdan o'tishda xato.");
@@ -131,6 +128,11 @@ export function useRegister() {
       }
     },
     [detectSingleFaceDescriptor, form, modelsLoaded, navigate]
+  );
+
+  const classQuickPicks = useMemo(
+    () => ['5-A', '6-A', '7-A', '8-A', '9-A', '10-A', '11-A', '11-B'],
+    []
   );
 
   const videoConstraints = useMemo(
@@ -150,7 +152,9 @@ export function useRegister() {
     modelsLoaded,
     isBootstrapping,
     videoConstraints,
+    classQuickPicks,
     onInputChange,
+    onClassQuickPick,
     onSubmit,
   };
 }

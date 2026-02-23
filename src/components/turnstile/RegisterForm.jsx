@@ -1,3 +1,5 @@
+import { memo } from 'react';
+
 function RegisterForm({
   form,
   onInputChange,
@@ -5,62 +7,71 @@ function RegisterForm({
   registering,
   isLoadingUsers,
   modelsLoaded,
+  classQuickPicks,
+  onClassQuickPick,
 }) {
   return (
-    <form
-      onSubmit={onSubmit}
-      style={{
-        margin: '28px auto 0',
-        maxWidth: '480px',
-        display: 'grid',
-        gap: '10px',
-        textAlign: 'left',
-      }}
-    >
-      <h2 style={{ margin: 0, textAlign: 'center' }}>Yangi user ro'yxatdan o'tkazish</h2>
+    <form onSubmit={onSubmit} className="panel form-grid">
+      <div className="panel-header">
+        <h3>Yangi user ro'yxatdan o'tkazish</h3>
+      </div>
 
-      <input
-        name="name"
-        value={form.name}
-        onChange={onInputChange}
-        placeholder="F.I.O"
-        autoComplete="off"
-        required
-        style={{ padding: '10px', borderRadius: '8px', border: '1px solid #ccc' }}
-      />
+      <label className="field">
+        <span>F.I.O</span>
+        <input
+          className="input"
+          name="name"
+          value={form.name}
+          onChange={onInputChange}
+          placeholder="Masalan: Ali Valiyev"
+          autoComplete="off"
+          required
+        />
+      </label>
 
-      <input
-        name="className"
-        value={form.className}
-        onChange={onInputChange}
-        placeholder="Sinf (masalan 9-A)"
-        autoComplete="off"
-        required
-        style={{ padding: '10px', borderRadius: '8px', border: '1px solid #ccc' }}
-      />
+      <label className="field">
+        <span>Sinf</span>
+        <input
+          className="input"
+          name="className"
+          value={form.className}
+          onChange={onInputChange}
+          placeholder="Masalan: 9-A"
+          autoComplete="off"
+          required
+        />
+      </label>
 
-      <input
-        name="rollNumber"
-        value={form.rollNumber}
-        onChange={onInputChange}
-        placeholder="Roll number"
-        autoComplete="off"
-        required
-        style={{ padding: '10px', borderRadius: '8px', border: '1px solid #ccc' }}
-      />
+      <div className="quick-picks">
+        {classQuickPicks?.map((item) => (
+          <button
+            key={item}
+            type="button"
+            className="chip"
+            onClick={() => onClassQuickPick(item)}
+          >
+            {item}
+          </button>
+        ))}
+      </div>
+
+      <label className="field">
+        <span>Roll number</span>
+        <input
+          className="input"
+          name="rollNumber"
+          value={form.rollNumber}
+          onChange={onInputChange}
+          placeholder="Masalan: 0901"
+          autoComplete="off"
+          required
+        />
+      </label>
 
       <button
         type="submit"
         disabled={registering || isLoadingUsers || !modelsLoaded}
-        style={{
-          padding: '10px 14px',
-          border: 'none',
-          borderRadius: '8px',
-          background: '#0f62fe',
-          color: '#fff',
-          fontWeight: 600,
-          cursor: 'pointer',
-        }}
+        className="btn btn-primary"
       >
         {registering ? 'Saqlanmoqda...' : "Face bilan ro'yxatdan o'tkazish"}
       </button>
@@ -68,4 +79,4 @@ function RegisterForm({
   );
 }
 
-export default RegisterForm;
+export default memo(RegisterForm);

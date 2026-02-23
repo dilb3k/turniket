@@ -1,20 +1,26 @@
+import { memo } from 'react';
+
 function EntryLogs({ entryLogs }) {
   return (
-    <div style={{ margin: '18px auto 0', maxWidth: '720px', textAlign: 'left' }}>
-      <h3 style={{ marginBottom: '8px' }}>Oxirgi kirishlar</h3>
+    <section className="panel">
+      <div className="panel-header">
+        <h3>Oxirgi kirishlar</h3>
+      </div>
+
       {entryLogs.length === 0 ? (
-        <div style={{ color: '#666' }}>Hozircha kirishlar yo'q.</div>
+        <div className="muted">Hozircha session kirishlari yo'q.</div>
       ) : (
-        <ul style={{ margin: 0, paddingLeft: '20px' }}>
+        <ul className="entry-list">
           {entryLogs.map((log) => (
-            <li key={log.id} style={{ marginBottom: '4px' }}>
-              {log.name} - {new Date(log.at).toLocaleString()}
+            <li key={log.id} className="entry-item">
+              <span>{log.name}</span>
+              <time>{new Date(log.at).toLocaleString()}</time>
             </li>
           ))}
         </ul>
       )}
-    </div>
+    </section>
   );
 }
 
-export default EntryLogs;
+export default memo(EntryLogs);

@@ -31,3 +31,7 @@ export function normalizeDescriptor(rawDescriptor) {
     .filter((value) => Number.isFinite(value))
     .slice(0, DESCRIPTOR_LENGTH);
 }
+
+export function compactDescriptor(rawDescriptor) {
+  return normalizeDescriptor(rawDescriptor).map((value) => Number(value.toFixed(6)));
+}

@@ -15,19 +15,24 @@ function RegisterPage() {
     modelsLoaded,
     isBootstrapping,
     videoConstraints,
+    classQuickPicks,
     onInputChange,
+    onClassQuickPick,
     onSubmit,
   } = useRegister();
 
   return (
-    <div style={{ textAlign: 'center', padding: '20px', fontFamily: 'Segoe UI, sans-serif' }}>
-      <h1>User Register</h1>
-
-      <div style={{ marginBottom: '12px' }}>
-        <Link to="/" style={{ color: '#0f62fe', fontWeight: 600 }}>
-          Turniket sahifasiga qaytish
+    <main className="page-shell">
+      <header className="page-hero">
+        <div>
+          <p className="eyebrow">Enrollment</p>
+          <h1>User Register</h1>
+          <p className="subtext">Yangi o'quvchini xavfsiz va tez ro'yxatdan o'tkazish</p>
+        </div>
+        <Link to="/" className="btn btn-neutral">
+          Turniket paneliga qaytish
         </Link>
-      </div>
+      </header>
 
       <StatusBanner status={status} warning="" matchedStudent={false} color="#1f2a44" />
 
@@ -37,26 +42,32 @@ function RegisterPage() {
           <LoadingOverlay text="Register modeli yuklanmoqda..." />
         </>
       ) : (
-        <>
-          <CameraPanel
-            webcamRef={webcamRef}
-            canvasRef={null}
-            videoConstraints={videoConstraints}
-            onPlay={undefined}
-            showCanvas={false}
-          />
+        <section className="main-grid register-grid">
+          <div className="stack-col">
+            <CameraPanel
+              webcamRef={webcamRef}
+              canvasRef={null}
+              videoConstraints={videoConstraints}
+              onPlay={undefined}
+              showCanvas={false}
+            />
+          </div>
 
-          <RegisterForm
-            form={form}
-            onInputChange={onInputChange}
-            onSubmit={onSubmit}
-            registering={registering}
-            isLoadingUsers={false}
-            modelsLoaded={modelsLoaded}
-          />
-        </>
+          <div className="stack-col">
+            <RegisterForm
+              form={form}
+              onInputChange={onInputChange}
+              onClassQuickPick={onClassQuickPick}
+              classQuickPicks={classQuickPicks}
+              onSubmit={onSubmit}
+              registering={registering}
+              isLoadingUsers={false}
+              modelsLoaded={modelsLoaded}
+            />
+          </div>
+        </section>
       )}
-    </div>
+    </main>
   );
 }
 

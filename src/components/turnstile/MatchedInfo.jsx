@@ -1,18 +1,17 @@
+import { memo } from 'react';
+
 function MatchedInfo({ matchedStudent, recognizedAt }) {
   if (!matchedStudent || !recognizedAt) {
     return null;
   }
 
   return (
-    <div style={{ marginTop: '18px', fontSize: '1.2rem', color: 'green' }}>
-      <div>
-        Kirish tasdiqlandi: <strong>{matchedStudent}</strong>
-      </div>
-      <div>
-        Vaqt: <strong>{recognizedAt.toLocaleString()}</strong>
-      </div>
-    </div>
+    <section className="matched-card">
+      <div className="matched-title">Kirish tasdiqlandi</div>
+      <div className="matched-user">{matchedStudent}</div>
+      <div className="matched-time">{recognizedAt.toLocaleString()}</div>
+    </section>
   );
 }
 
-export default MatchedInfo;
+export default memo(MatchedInfo);

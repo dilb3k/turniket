@@ -1,15 +1,16 @@
+import { memo } from 'react';
 import Webcam from 'react-webcam';
 
 function CameraPanel({ webcamRef, canvasRef, videoConstraints, onPlay, showCanvas = true }) {
   return (
-    <div style={{ position: 'relative', display: 'inline-block' }}>
+    <div className="camera-shell">
       <Webcam
         ref={webcamRef}
         audio={false}
         mirrored
         videoConstraints={videoConstraints}
         onPlay={onPlay}
-        style={{ borderRadius: '12px', boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)' }}
+        className="camera-video"
       />
 
       {showCanvas && (
@@ -17,17 +18,11 @@ function CameraPanel({ webcamRef, canvasRef, videoConstraints, onPlay, showCanva
           ref={canvasRef}
           width={videoConstraints.width}
           height={videoConstraints.height}
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            pointerEvents: 'none',
-            borderRadius: '12px',
-          }}
+          className="camera-overlay"
         />
       )}
     </div>
   );
 }
 
-export default CameraPanel;
+export default memo(CameraPanel);

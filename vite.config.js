@@ -9,4 +9,15 @@ export default defineConfig({
       ignored: ['**/data/*.json'],
     },
   },
+  build: {
+    chunkSizeWarningLimit: 900,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          face: ['face-api.js'],
+          react: ['react', 'react-dom', 'react-router-dom'],
+        },
+      },
+    },
+  },
 })

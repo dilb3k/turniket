@@ -4,15 +4,27 @@ import {
   DESCRIPTOR_LENGTH,
   ENTRY_COOLDOWN_MS,
   FACE_MATCH_THRESHOLD,
-  MODEL_SOURCES,
+  MAX_ENTRY_LOGS,
+  MAX_PASS_HISTORY,
+  PATCH_FLUSH_INTERVAL_MS,
+  SCAN_INTERVAL_MS,
 } from '../lib/turnstile/constants';
 import { buildDescriptors } from '../lib/turnstile/descriptors';
+import { DETECTOR_OPTIONS, loadFaceModelsOnce } from '../lib/turnstile/faceEngine';
 import { fetchUsersApi, patchUserApi } from '../lib/turnstile/usersApi';
 
-const DETECTOR_OPTIONS = new faceapi.TinyFaceDetectorOptions({
-  inputSize: 320,
-  scoreThreshold: 0.5,
-});
+function isSameLocalDay(isoDate, nowDate) {
+  if (!isoDate) {
+    return false;
+  }
+
+  const date = new Date(isoDate);
+  return (
+    date.getFullYear() === nowDate.getFullYear() &&
+    date.getMonth() === nowDate.getMonth() &&
+    date.getDate() === nowDate.getDate()
+  );
+}
 
 export function useTurnstile() {
   const webcamRef = useRef(null);
@@ -21,6 +33,9 @@ export function useTurnstile() {
   const scanActiveRef = useRef(false);
   const modelReadyRef = useRef(false);
   const lastEntryByUserRef = useRef({});
+  const pendingPatchRef = useRef(new Map());
+  const patchFlushTimeoutRef = useRef(null);
+  const lastUnknownMarkRef = useRef(0);
 
   const [status, setStatus] = useState('Modellar yuklanmoqda...');
   const [warning, setWarning] = useState('');
@@ -30,6 +45,13 @@ export function useTurnstile() {
   const [recognizedAt, setRecognizedAt] = useState(null);
   const [entryLogs, setEntryLogs] = useState([]);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
+  const [isScanning, setIsScanning] = useState(false);
+  const [unknownAttempts, setUnknownAttempts] = useState(0);
+  const [lastSyncAt, setLastSyncAt] = useState(null);
+
+  const setStatusSafe = useCallback((nextValue) => {
+    setStatus((prev) => (prev === nextValue ? prev : nextValue));
+  }, []);
 
   const usersById = useMemo(() => {
     return users.reduce((acc, user) => {
@@ -46,24 +68,70 @@ export function useTurnstile() {
     return new faceapi.FaceMatcher(labeledDescriptors, 0.6);
   }, [labeledDescriptors]);
 
-  const loadModels = useCallback(async () => {
-    let lastError = null;
+  const stats = useMemo(() => {
+    const now = new Date();
+    const uniqueUsers = new Set(entryLogs.map((item) => item.userId)).size;
+    const passedToday = users.filter((user) => isSameLocalDay(user.lastPassedAt, now)).length;
 
-    for (const source of MODEL_SOURCES) {
-      try {
-        await Promise.all([
-          faceapi.nets.tinyFaceDetector.loadFromUri(source),
-          faceapi.nets.faceLandmark68Net.loadFromUri(source),
-          faceapi.nets.faceRecognitionNet.loadFromUri(source),
-        ]);
-        return source;
-      } catch (error) {
-        lastError = error;
-      }
+    return {
+      totalUsers: users.length,
+      validDescriptors: labeledDescriptors.length,
+      invalidDescriptors: Math.max(users.length - labeledDescriptors.length, 0),
+      sessionEntries: entryLogs.length,
+      uniqueSessionUsers: uniqueUsers,
+      passedToday,
+      unknownAttempts,
+      lastSyncAt,
+      scanState: isScanning ? 'Faol' : 'Pauza',
+    };
+  }, [entryLogs, isScanning, labeledDescriptors.length, lastSyncAt, unknownAttempts, users]);
+
+  const topUsers = useMemo(() => {
+    return [...users]
+      .map((user) => ({
+        id: String(user.id),
+        name: user.name,
+        className: user.class,
+        totalPasses: Array.isArray(user.passHistory) ? user.passHistory.length : 0,
+        lastPassedAt: user.lastPassedAt || null,
+      }))
+      .sort((a, b) => b.totalPasses - a.totalPasses)
+      .slice(0, 5);
+  }, [users]);
+
+  const flushPendingPatches = useCallback(async () => {
+    patchFlushTimeoutRef.current = null;
+
+    const entries = Array.from(pendingPatchRef.current.entries());
+    if (!entries.length) {
+      return;
     }
 
-    throw lastError || new Error('Face model yuklanmadi');
+    pendingPatchRef.current.clear();
+
+    const results = await Promise.allSettled(
+      entries.map(([userId, payload]) => patchUserApi(userId, payload))
+    );
+
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        const [userId, payload] = entries[index];
+        pendingPatchRef.current.set(userId, payload);
+      }
+    });
+
+    if (pendingPatchRef.current.size > 0 && !patchFlushTimeoutRef.current) {
+      patchFlushTimeoutRef.current = setTimeout(flushPendingPatches, PATCH_FLUSH_INTERVAL_MS);
+    }
   }, []);
+
+  const schedulePatchFlush = useCallback(() => {
+    if (patchFlushTimeoutRef.current) {
+      return;
+    }
+
+    patchFlushTimeoutRef.current = setTimeout(flushPendingPatches, PATCH_FLUSH_INTERVAL_MS);
+  }, [flushPendingPatches]);
 
   const fetchUsers = useCallback(async () => {
     const list = await fetchUsersApi();
@@ -71,11 +139,12 @@ export function useTurnstile() {
 
     setUsers(list);
     setLabeledDescriptors(descriptors);
+    setLastSyncAt(new Date().toISOString());
 
     if (descriptors.length === 0) {
-      setStatus("Tizimda yaroqli user yo'q. Avval register qiling.");
+      setStatusSafe("Tizimda yaroqli user yo'q. Avval register qiling.");
     } else {
-      setStatus("O'quvchilar yuklandi. Kameraga qarang.");
+      setStatusSafe("O'quvchilar yuklandi. Kameraga qarang.");
     }
 
     setWarning(
@@ -83,55 +152,69 @@ export function useTurnstile() {
         ? `Ogohlantirish: ${skipped} ta user descriptor yaroqsiz, tanishda ishlatilmaydi.`
         : ''
     );
-  }, []);
+  }, [setStatusSafe]);
 
-  const patchUserEntryTime = useCallback(async (userId, passedAtIso) => {
-    let patchPayload = null;
+  const refreshUsers = useCallback(async () => {
+    try {
+      setStatusSafe("Userlar yangilanmoqda...");
+      await fetchUsers();
+      setStatusSafe("Userlar yangilandi.");
+    } catch (error) {
+      console.error(error);
+      setStatusSafe("Yangilashda xato. json-server holatini tekshiring.");
+    }
+  }, [fetchUsers, setStatusSafe]);
 
-    setUsers((prev) => {
-      const next = prev.map((item) => {
-        if (String(item.id) !== String(userId)) {
-          return item;
-        }
+  const clearEntryLogs = useCallback(() => {
+    setEntryLogs([]);
+    setStatusSafe("Session kirish loglari tozalandi.");
+  }, [setStatusSafe]);
 
-        const currentHistory = Array.isArray(item.passHistory) ? item.passHistory : [];
-        patchPayload = {
-          lastPassedAt: passedAtIso,
-          passHistory: [...currentHistory, passedAtIso].slice(-100),
-        };
+  const markUserPassed = useCallback(
+    (userId, passedAtIso) => {
+      let patchPayload = null;
 
-        return {
-          ...item,
-          ...patchPayload,
-        };
+      setUsers((prev) => {
+        return prev.map((item) => {
+          if (String(item.id) !== String(userId)) {
+            return item;
+          }
+
+          const currentHistory = Array.isArray(item.passHistory) ? item.passHistory : [];
+          patchPayload = {
+            lastPassedAt: passedAtIso,
+            passHistory: [...currentHistory, passedAtIso].slice(-MAX_PASS_HISTORY),
+          };
+
+          return {
+            ...item,
+            ...patchPayload,
+          };
+        });
       });
 
-      return next;
-    });
-
-    if (!patchPayload) {
-      return;
-    }
-
-    try {
-      await patchUserApi(userId, patchPayload);
-    } catch (error) {
-      console.error('Entry time saqlashda xato:', error);
-    }
-  }, []);
+      if (patchPayload) {
+        pendingPatchRef.current.set(String(userId), patchPayload);
+        schedulePatchFlush();
+      }
+    },
+    [schedulePatchFlush]
+  );
 
   useEffect(() => {
     const boot = async () => {
       let modelOk = false;
+
       try {
-        setStatus('Modellar yuklanmoqda... (15-40 soniya)');
-        const loadedFrom = await loadModels();
+        setStatusSafe('Modellar yuklanmoqda... (15-40 soniya)');
+        const loadedFrom = await loadFaceModelsOnce();
         modelOk = true;
-        setStatus(`Modellar tayyor (${loadedFrom}). O'quvchilar ro'yxati yuklanmoqda...`);
+
+        setStatusSafe(`Modellar tayyor (${loadedFrom}). O'quvchilar ro'yxati yuklanmoqda...`);
         await fetchUsers();
       } catch (error) {
         console.error(error);
-        setStatus('Xato: model yoki users yuklanmadi. json-serverni tekshiring.');
+        setStatusSafe('Xato: model yoki users yuklanmadi. json-serverni tekshiring.');
         setWarning('');
       } finally {
         modelReadyRef.current = modelOk;
@@ -140,14 +223,31 @@ export function useTurnstile() {
     };
 
     boot();
-  }, [fetchUsers, loadModels]);
+  }, [fetchUsers, setStatusSafe]);
 
   useEffect(() => {
+    const pendingPatchMap = pendingPatchRef.current;
+
     return () => {
       scanActiveRef.current = false;
+      setIsScanning(false);
       modelReadyRef.current = false;
+
       if (scanTimeoutRef.current) {
         clearTimeout(scanTimeoutRef.current);
+      }
+
+      if (patchFlushTimeoutRef.current) {
+        clearTimeout(patchFlushTimeoutRef.current);
+      }
+
+      const pendingEntries = Array.from(pendingPatchMap.entries());
+      pendingPatchMap.clear();
+
+      if (pendingEntries.length > 0) {
+        Promise.allSettled(
+          pendingEntries.map(([userId, payload]) => patchUserApi(userId, payload))
+        ).catch(() => undefined);
       }
     };
   }, []);
@@ -168,6 +268,10 @@ export function useTurnstile() {
       .withFaceDescriptors();
 
     const canvas = canvasRef.current;
+    if (!canvas) {
+      return;
+    }
+
     const displaySize = { width: video.videoWidth || 720, height: video.videoHeight || 560 };
     faceapi.matchDimensions(canvas, displaySize);
 
@@ -179,13 +283,14 @@ export function useTurnstile() {
     if (!resizedDetections.length) {
       setMatchedStudent(null);
       setRecognizedAt(null);
-      setStatus('Yuz topilmadi, kameraga qarang.');
+      setStatusSafe('Yuz topilmadi, kameraga qarang.');
       return;
     }
 
     faceapi.draw.drawDetections(canvas, resizedDetections);
 
     const now = new Date();
+    const nowTs = now.getTime();
     let anyKnown = false;
     let anyAccepted = false;
 
@@ -209,55 +314,59 @@ export function useTurnstile() {
       anyKnown = true;
 
       const prev = lastEntryByUserRef.current[userId] || 0;
-      if (now.getTime() - prev < ENTRY_COOLDOWN_MS) {
+      if (nowTs - prev < ENTRY_COOLDOWN_MS) {
         continue;
       }
 
       anyAccepted = true;
-      lastEntryByUserRef.current[userId] = now.getTime();
+      lastEntryByUserRef.current[userId] = nowTs;
 
       const displayName = `${user.name} (${user.class})`;
       setMatchedStudent(displayName);
       setRecognizedAt(now);
-      setStatus(`Kirish tasdiqlandi: ${displayName}`);
+      setStatusSafe(`Kirish tasdiqlandi: ${displayName}`);
 
       const passedAtIso = now.toISOString();
-      setEntryLogs((prevLogs) => [
-        {
-          id: `${userId}-${now.getTime()}`,
-          userId,
-          name: displayName,
-          at: passedAtIso,
-        },
-        ...prevLogs,
-      ].slice(0, 50));
+      setEntryLogs((prevLogs) => {
+        return [
+          {
+            id: `${userId}-${nowTs}`,
+            userId,
+            name: displayName,
+            at: passedAtIso,
+          },
+          ...prevLogs,
+        ].slice(0, MAX_ENTRY_LOGS);
+      });
 
-      await patchUserEntryTime(userId, passedAtIso);
+      markUserPassed(userId, passedAtIso);
     }
 
     if (!anyKnown) {
       setMatchedStudent(null);
       setRecognizedAt(null);
-      setStatus("Noma'lum user. Bazada topilmadi.");
+      setStatusSafe("Noma'lum user. Bazada topilmadi.");
+
+      if (nowTs - lastUnknownMarkRef.current > 2000) {
+        lastUnknownMarkRef.current = nowTs;
+        setUnknownAttempts((prev) => prev + 1);
+      }
+
       return;
     }
 
     if (!anyAccepted) {
-      setStatus('User aniqlandi. Qayta tasdiqlash uchun biroz kuting...');
+      setStatusSafe('User aniqlandi. Qayta tasdiqlash uchun biroz kuting...');
     }
-  }, [matcher, patchUserEntryTime, usersById]);
+  }, [markUserPassed, matcher, setStatusSafe, usersById]);
 
-  const handleVideoPlay = useCallback(() => {
-    if (scanActiveRef.current) {
-      return;
-    }
-
-    if (!modelReadyRef.current) {
-      setStatus('Model hali yuklanyapti, biroz kuting...');
+  const startScanning = useCallback(() => {
+    if (scanActiveRef.current || !modelReadyRef.current) {
       return;
     }
 
     scanActiveRef.current = true;
+    setIsScanning(true);
 
     const loop = async () => {
       if (!scanActiveRef.current) {
@@ -270,11 +379,48 @@ export function useTurnstile() {
         console.error(error);
       }
 
-      scanTimeoutRef.current = setTimeout(loop, 500);
+      scanTimeoutRef.current = setTimeout(loop, SCAN_INTERVAL_MS);
     };
 
     loop();
   }, [detectAndMatch]);
+
+  const stopScanning = useCallback(() => {
+    scanActiveRef.current = false;
+    setIsScanning(false);
+
+    if (scanTimeoutRef.current) {
+      clearTimeout(scanTimeoutRef.current);
+      scanTimeoutRef.current = null;
+    }
+
+    setStatusSafe("Skaner pauza holatiga o'tdi.");
+  }, [setStatusSafe]);
+
+  const toggleScanning = useCallback(() => {
+    if (!modelReadyRef.current) {
+      setStatusSafe('Model hali tayyor emas.');
+      return;
+    }
+
+    if (scanActiveRef.current) {
+      stopScanning();
+    } else {
+      startScanning();
+      setStatusSafe('Skaner qayta ishga tushdi.');
+    }
+  }, [setStatusSafe, startScanning, stopScanning]);
+
+  const handleVideoPlay = useCallback(() => {
+    if (!modelReadyRef.current) {
+      setStatusSafe('Model hali yuklanyapti, biroz kuting...');
+      return;
+    }
+
+    if (!scanActiveRef.current) {
+      startScanning();
+    }
+  }, [setStatusSafe, startScanning]);
 
   const videoConstraints = useMemo(
     () => ({
@@ -294,9 +440,14 @@ export function useTurnstile() {
     matchedStudent,
     recognizedAt,
     entryLogs,
+    topUsers,
+    stats,
+    isScanning,
     isBootstrapping,
     videoConstraints,
     handleVideoPlay,
+    toggleScanning,
+    refreshUsers,
+    clearEntryLogs,
   };
 }
-
